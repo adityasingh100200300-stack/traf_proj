@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, Float, ForeignKey, DateTime, Index
+from sqlalchemy import Column, String, Integer, Float, ForeignKey, DateTime, Index, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from geoalchemy2 import Geometry
@@ -14,6 +14,7 @@ class Intersection(Base):
     lanes = relationship("Lane", back_populates="intersection", cascade="all, delete-orphan")
     phases = relationship("SignalPhase", back_populates="intersection", cascade="all, delete-orphan")
     telemetry = relationship("TrafficTelemetry", back_populates="intersection", cascade="all, delete-orphan")
+    emergency_events = relationship("EmergencyEvent", back_populates="intersection")
 
 class Lane(Base):
     __tablename__ = "lanes"
@@ -52,3 +53,16 @@ class TrafficTelemetry(Base):
     __table_args__ = (
         Index("ix_traffic_telemetry_ts_intersection", "timestamp", "intersection_id"),
     )
+
+class EmergencyEvent(Base):
+    __tablename__ = "emergency_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    vehicle_id = Column(String, nullable=False, index=True)
+    vehicle_type = Column(String, nullable=False)  # e.g., "ambulance", "fire_truck"
+    intersection_id = Column(String, ForeignKey("intersections.id"), nullable=False, index=True)
+    override_phase = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    intersection = relationship("Intersection", back_populates="emergency_events")
