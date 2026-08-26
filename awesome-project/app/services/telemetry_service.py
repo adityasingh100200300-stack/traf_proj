@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -64,7 +65,7 @@ class TelemetryService:
         # 1. Calculate Congestion Score
         congestion_score = cls.calculate_congestion_score(payload.lanes)
 
-        # 2. Persist to Database (Timescale/Postgres)
+        # 2. Persist to Database (Timescale/Postgres) if available
         try:
             db_records = [
                 TrafficTelemetry(
@@ -79,11 +80,14 @@ class TelemetryService:
                 for lane in payload.lanes
             ]
             db.add_all(db_records)
-            await db.commit()
+            await asyncio.wait_for(db.commit(), timeout=0.5)
         except Exception as e:
-            await db.rollback()
-            logger.error(f"Failed to persist telemetry to database: {e}")
-            # Non-blocking for live broadcast in prototype mode, but logged
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            logger.warning(f"Database persistence skipped (DB unavailable or timed out): {e}")
+            # Non-blocking for live broadcast in prototype mode
 
         # 3. Prepare payload dictionary
         traffic_data = {

@@ -5,6 +5,7 @@ engine = create_async_engine(
     settings.DATABASE_URL,
     echo=settings.DEBUG,
     future=True,
+    connect_args={"timeout": 1.0} if "asyncpg" in settings.DATABASE_URL else {}
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -15,4 +16,4 @@ AsyncSessionLocal = async_sessionmaker(
 
 async def get_db():
     async with AsyncSessionLocal() as session:
-        yield session
+        yield session

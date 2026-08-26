@@ -1,0 +1,20 @@
+<additional>
+    <tlLogic id="t" type="static" programID="0" offset="0">
+        <!-- Phase 0: NS Green -->
+        <phase duration="42" state="GGGGgrrrrrGGGGgrrrrr"/>
+        <!-- Phase 1: NS Yellow -->
+        <phase duration="3"  state="yyyyyrrrrryyyyyrrrrr"/>
+        <!-- Phase 2: NS Left Green -->
+        <phase duration="42" state="rrrGgrrrrrrrrGgrrrrr"/>
+        <!-- Phase 3: NS Left Yellow -->
+        <phase duration="3"  state="rrryyrrrrrrrrryyrrrr"/>
+        <!-- Phase 4: EW Green -->
+        <phase duration="42" state="rrrrrGGGGgrrrrrGGGGg"/>
+        <!-- Phase 5: EW Yellow -->
+        <phase duration="3"  state="rrrrryyyyyrrrrryyyyy"/>
+        <!-- Phase 6: EW Left Green -->
+        <phase duration="42" state="rrrrrrrrGgrrrrrrrrGg"/>
+        <!-- Phase 7: EW Left Yellow -->
+        <phase duration="3"  state="rrrrrrrryyrrrrrrrryy"/>
+    </tlLogic>
+</additional>

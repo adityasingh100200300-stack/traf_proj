@@ -1,96 +1,77 @@
-import logging
-from typing import Dict, List, Any
-from app.simulation.base import SimulationClient, SimulationStepResult, SimulatedLaneMetric
+# app/simulation/sumo_client.py
+import traci
+from typing import Dict, Any, List
+from app.optimization.rl_optimizer import RLOptimizer
 
-logger = logging.getLogger(__name__)
+class SumoTraCIClient:
+    def __init__(
+        self,
+        config_path: str = "app/simulation/networks/single-intersection.sumocfg",
+        tls_id: str = "t",
+        use_gui: bool = False
+    ):
+        self.config_path = config_path
+        self.tls_id = tls_id
+        self.sumo_binary = "sumo-gui" if use_gui else "sumo"
+        self.inflow_lanes = [
+            "n_t_0", "n_t_1",
+            "s_t_0", "s_t_1",
+            "e_t_0", "e_t_1",
+            "w_t_0", "w_t_1"
+        ]
+        # Maps DQN action index (0..3) to SUMO Green Phase Indices (0, 2, 4, 6)
+        self.action_to_phase_index = {
+            0: 0,  # North-South Through/Right
+            1: 2,  # North-South Left Turn
+            2: 4,  # East-West Through/Right
+            3: 6   # East-West Left Turn
+        }
+        self.rl_optimizer = RLOptimizer()
 
-class SumoTraCIClient(SimulationClient):
-    """
-    Connects to Eclipse SUMO over TraCI protocol.
-    Gracefully handles missing traci library if running in lightweight environments.
-    """
-    def __init__(self, sumo_binary: str = "sumo", config_file: str = None, port: int = 8813):
-        self.sumo_binary = sumo_binary
-        self.config_file = config_file
-        self.port = port
-        self._traci = None
-        self._connected = False
-        self._step_count = 0
+    def start(self):
+        sumo_cmd = [self.sumo_binary, "-c", self.config_path, "--start", "--quit-on-end"]
+        traci.start(sumo_cmd)
 
-    async def connect(self) -> bool:
-        try:
-            import traci
-            self._traci = traci
-            if not self._traci.isEmbedded():
-                cmd = [self.sumo_binary, "-c", self.config_file or "simulation.sumocfg", "--remote-port", str(self.port)]
-                self._traci.start(cmd)
-            self._connected = True
-            logger.info("Successfully connected to SUMO TraCI instance")
-            return True
-        except ImportError:
-            logger.error("traci library not installed. Install sumo/traci or switch to SIMULATION_MODE=mock")
-            return False
-        except Exception as e:
-            logger.error(f"Failed to start SUMO TraCI connection: {e}")
-            return False
+    def get_telemetry_state(self) -> Dict[str, Any]:
+        """Extracts queue metrics and halting vehicle counts from junction lanes."""
+        lane_data = {}
+        densities = []
 
-    async def disconnect(self) -> None:
-        if self._traci and self._connected:
-            try:
-                self._traci.close()
-            except Exception:
-                pass
-            self._connected = False
+        for lane in self.inflow_lanes:
+            halting = traci.lane.getLastStepHaltingNumber(lane)
+            vehicles = traci.lane.getLastStepVehicleNumber(lane)
+            speed = traci.lane.getLastStepMeanSpeed(lane) * 3.6  # m/s to km/h
+            length = traci.lane.getLength(lane)
+            occupancy = min(halting * 7.5 / length, 1.0)
 
-    async def is_connected(self) -> bool:
-        return self._connected
+            lane_data[lane] = {
+                "vehicles": vehicles,
+                "queue_length": float(halting * 7.5),
+                "speed": float(speed),
+                "occupancy": round(occupancy, 2)
+            }
+            densities.append(occupancy)
 
-    async def step(self) -> SimulationStepResult:
-        if not self._traci or not self._connected:
-            raise RuntimeError("TraCI client is not connected")
+        return {"lane_data": lane_data, "densities": densities}
 
-        self._traci.simulationStep()
-        self._step_count += 1
-        sim_time = self._traci.simulation.getTime()
-        lane_ids = self._traci.lane.getIDList()
+    def step(self, current_sim_step: int):
+        """Advances simulation and evaluates RL phase control every 10 seconds."""
+        traci.simulationStep()
 
-        lane_metrics: Dict[str, SimulatedLaneMetric] = {}
-        total_vehicles = self._traci.vehicle.getIDCount()
-
-        for lane_id in lane_ids:
-            # Filter internal junction lanes (starting with ':')
-            if lane_id.startswith(":"):
-                continue
+        if current_sim_step % 10 == 0:
+            state = self.get_telemetry_state()
+            current_phase = traci.trafficlight.getPhase(self.tls_id)
             
-            v_count = self._traci.lane.getLastStepVehicleNumber(lane_id)
-            v_speed = self._traci.lane.getLastStepMeanSpeed(lane_id) * 3.6  # m/s to km/h
-            q_len = self._traci.lane.getLastStepHaltingNumber(lane_id) * 5.0 # Approx 5m per halting car
-            occ = self._traci.lane.getLastStepOccupancy(lane_id)
-
-            lane_metrics[lane_id] = SimulatedLaneMetric(
-                lane_id=lane_id,
-                vehicle_count=v_count,
-                queue_length=round(q_len, 1),
-                average_speed=round(v_speed, 1),
-                occupancy=round(occ, 2)
+            # Predict optimal phase using trained DQN model
+            optimal_action = self.rl_optimizer.optimize_phase(
+                lane_densities=state["densities"],
+                current_phase_idx=current_phase // 2
             )
+            
+            target_phase = self.action_to_phase_index.get(optimal_action, 0)
+            if target_phase != current_phase:
+                # Transition through yellow before switching if needed
+                traci.trafficlight.setPhase(self.tls_id, target_phase)
 
-        return SimulationStepResult(
-            step=self._step_count,
-            timestamp=sim_time,
-            active_vehicles=total_vehicles,
-            lanes=lane_metrics
-        )
-
-    async def set_signal_phase(self, intersection_id: str, phase_index: int) -> bool:
-        if self._traci and self._connected:
-            self._traci.trafficlight.setPhase(intersection_id, phase_index)
-            return True
-        return False
-
-    async def set_signal_program(self, intersection_id: str, phases: List[Dict[str, Any]]) -> bool:
-        # SUMO Logic / Phase definition integration
-        if self._traci and self._connected:
-            logger.info(f"Updated SUMO TLS program on {intersection_id} with {len(phases)} phases")
-            return True
-        return False
+    def close(self):
+        traci.close()
