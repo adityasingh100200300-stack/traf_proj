@@ -77,6 +77,20 @@ def point_in_lane(x, y, lanes_dict):
             return name
     return None
 
+def box_in_lane(x1, y1, x2, y2, lanes_dict):
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    pts = [
+        (cx, cy),           # center
+        (cx, y2),           # bottom center (tires)
+        (cx, y1),           # top center
+        (cx, (cy + y2)//2)  # lower middle
+    ]
+    for pt in pts:
+        lane = point_in_lane(pt[0], pt[1], lanes_dict)
+        if lane:
+            return lane, cx, cy
+    return None, cx, cy
+
 def lane_area(poly):
     return cv2.contourArea(poly)
 
@@ -124,25 +138,27 @@ def run_lane_mapper(video_path: str = None, headless: bool = True, loop: bool = 
             now = time.time()
 
             frame = cv2.resize(frame, display_size)
-            results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.35, verbose=False)[0]
+            # Lowered confidence slightly to catch vehicles at the edge or farther away
+            results = model.track(frame, persist=True, tracker="bytetrack.yaml", conf=0.25, verbose=False)[0]
 
             lane_data = {
                 name: {"vehicle_count": 0, "classes": {}, "speeds": [], "covered_area": 0.0}
                 for name in lanes
             }
 
-            if results.boxes.id is not None:
-                for box, track_id in zip(results.boxes, results.boxes.id):
+            boxes = results.boxes
+            if boxes is not None and len(boxes) > 0:
+                track_ids = boxes.id.int().cpu().tolist() if boxes.id is not None else [-1] * len(boxes)
+                for box, tid in zip(boxes, track_ids):
                     cls_id = int(box.cls[0])
                     label = model.names[cls_id]
                     if label not in ("car", "bus", "truck", "motorcycle", "bicycle"):
                         continue
 
                     x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-                    tid = int(track_id)
-
-                    lane = point_in_lane(cx, cy, lanes)
+                    
+                    # Check if any key point of the vehicle box is inside a lane polygon
+                    lane, cx, cy = box_in_lane(x1, y1, x2, y2, lanes)
                     if not lane:
                         continue
 
@@ -150,16 +166,19 @@ def run_lane_mapper(video_path: str = None, headless: bool = True, loop: bool = 
                     lane_data[lane]["classes"][label] = lane_data[lane]["classes"].get(label, 0) + 1
                     lane_data[lane]["covered_area"] += (x2 - x1) * (y2 - y1)
 
-                    if tid in prev_positions:
+                    if tid != -1 and tid in prev_positions:
                         px, py, pt = prev_positions[tid]
                         dt = now - pt
-                        if dt > 0:
+                        if 0.01 < dt < 2.0:
                             dist_px = ((cx - px) ** 2 + (cy - py) ** 2) ** 0.5
                             dist_m = dist_px / pixels_per_meter
                             speed_mps = dist_m / dt
-                            lane_data[lane]["speeds"].append(speed_mps * 3.6)
+                            speed_kmh = speed_mps * 3.6
+                            if speed_kmh < 120.0:
+                                lane_data[lane]["speeds"].append(speed_kmh)
 
-                    prev_positions[tid] = (cx, cy, now)
+                    if tid != -1:
+                        prev_positions[tid] = (cx, cy, now)
 
                     if not headless:
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -170,8 +189,8 @@ def run_lane_mapper(video_path: str = None, headless: bool = True, loop: bool = 
                 if torch and torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-            # Publish telemetry to FastAPI backend every 15 frames
-            if frame_num % 15 == 0:
+            # Publish telemetry to FastAPI backend every 6 frames (~2-3 updates per second)
+            if frame_num % 6 == 0:
                 lanes_payload = []
                 for name, poly in lanes.items():
                     d = lane_data[name]

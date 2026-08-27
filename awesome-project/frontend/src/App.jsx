@@ -22,6 +22,19 @@ import {
 export default function TrafficControlDashboard() {
   const [telemetry, setTelemetry] = useState({});
   const [activePhase, setActivePhase] = useState("north_south");
+  const [targetPhase, setTargetPhase] = useState(null);
+  const transitionTimeout = useRef(null);
+
+  const triggerPhaseChange = (newPhase) => {
+    if (newPhase === activePhase || newPhase === targetPhase) return;
+    if (transitionTimeout.current) clearTimeout(transitionTimeout.current);
+    setTargetPhase(newPhase);
+    transitionTimeout.current = setTimeout(() => {
+      setActivePhase(newPhase);
+      setTargetPhase(null);
+      transitionTimeout.current = null;
+    }, 3000); // 3-second yellow transition
+  };
   const [congestion, setCongestion] = useState(0);
   const [wsConnected, setWsConnected] = useState(false);
   const [selectedAlgorithm, setSelectedAlgorithm] = useState("rl");
@@ -51,7 +64,10 @@ export default function TrafficControlDashboard() {
     fetch("http://127.0.0.1:8000/api/v1/intersections/INT-001/status")
       .then(res => res.json())
       .then(data => {
-        if (data.active_phase) setActivePhase(data.active_phase);
+        if (data.active_phase) {
+          setActivePhase(data.active_phase);
+          setTargetPhase(null);
+        }
         if (data.congestion_score !== undefined) setCongestion(data.congestion_score);
         if (data.cycle_length) setCycleLength(data.cycle_length);
         if (data.lanes && Object.keys(data.lanes).length > 0) setTelemetry(data.lanes);
@@ -74,12 +90,12 @@ export default function TrafficControlDashboard() {
         try {
           const data = JSON.parse(event.data);
           if (data.type === "phase_override") {
-            if (data.active_phase) setActivePhase(data.active_phase);
+            if (data.active_phase) triggerPhaseChange(data.active_phase);
             setPhaseHistory(prev => [`[${new Date().toLocaleTimeString()}] Phase -> ${data.active_phase.toUpperCase()} (${data.algorithm || "AI"})`, ...prev.slice(0, 4)]);
           } else if (data.traffic) {
             setTelemetry(data.traffic);
             setCongestion(data.congestion_score || 0);
-            if (data.active_phase) setActivePhase(data.active_phase);
+            if (data.active_phase) triggerPhaseChange(data.active_phase);
             if (typeof data.frame_number === "number" && data.frame_number > 0) {
               setVideoTiming(prev => ({
                 frame: data.frame_number,
@@ -121,7 +137,7 @@ export default function TrafficControlDashboard() {
       if (res.ok) {
         const data = await res.json();
         if (data.next_phase) {
-          setActivePhase(data.next_phase);
+          triggerPhaseChange(data.next_phase);
           setPhaseHistory(prev => [`[${new Date().toLocaleTimeString()}] ${data.algorithm.toUpperCase()} -> ${data.next_phase.toUpperCase()} (${data.cycle_length}s)`, ...prev.slice(0, 4)]);
         }
         if (data.cycle_length) setCycleLength(data.cycle_length);
@@ -189,15 +205,39 @@ export default function TrafficControlDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phase: phaseName })
       });
-      setActivePhase(phaseName);
+      triggerPhaseChange(phaseName);
       setPhaseHistory(prev => [`[${new Date().toLocaleTimeString()}] Operator -> ${phaseName.toUpperCase()}`, ...prev.slice(0, 4)]);
     } catch (err) {
       console.error("Phase override failed:", err);
     }
   };
 
-  const isNsOpen = activePhase === "north_south";
-  const isEwOpen = activePhase === "east_west";
+  const getPhaseStatus = (phaseGroup) => {
+    if (phaseGroup === activePhase) {
+      return targetPhase !== null ? "yellow" : "green";
+    }
+    return "red";
+  };
+  const nsStatus = getPhaseStatus("north_south");
+  const ewStatus = getPhaseStatus("east_west");
+
+  const getPhaseText = (status) => {
+    if (status === "yellow") return "🟡 YELLOW";
+    if (status === "green") return "🟢 GREEN";
+    return "🔴 RED";
+  };
+
+  const getPhaseClass = (status) => {
+    if (status === "yellow") return 'bg-yellow-500 text-slate-950 border border-yellow-400';
+    if (status === "green") return 'bg-emerald-500 text-slate-950 border border-emerald-400';
+    return 'bg-red-500/20 text-red-400 border border-red-500/40';
+  };
+  
+  const getPhaseContainerClass = (status) => {
+    if (status === "yellow") return 'bg-yellow-950/70 border-yellow-500/80 shadow-yellow-950/50';
+    if (status === "green") return 'bg-emerald-950/70 border-emerald-500/80 shadow-emerald-950/50';
+    return 'bg-slate-950/90 border-slate-800';
+  };
 
   // 4 Approach Aggregations (8 SUMO Inflow Lanes)
   const approaches = useMemo(() => {
@@ -217,7 +257,7 @@ export default function TrafficControlDashboard() {
         name: "North Corridor (n_t)",
         direction: "Inflow from North (Southbound)",
         phaseGroup: "north_south",
-        isOpen: isNsOpen,
+        status: nsStatus,
         lanes: [
           { id: "n_t_0", name: "Lane 0 (Thru)", data: n_0 },
           { id: "n_t_1", name: "Lane 1 (Left Turn)", data: n_1 }
@@ -230,7 +270,7 @@ export default function TrafficControlDashboard() {
         name: "South Corridor (s_t)",
         direction: "Inflow from South (Northbound)",
         phaseGroup: "north_south",
-        isOpen: isNsOpen,
+        status: nsStatus,
         lanes: [
           { id: "s_t_0", name: "Lane 0 (Thru)", data: s_0 },
           { id: "s_t_1", name: "Lane 1 (Left Turn)", data: s_1 }
@@ -243,7 +283,7 @@ export default function TrafficControlDashboard() {
         name: "East Corridor (e_t)",
         direction: "Inflow from East (Westbound)",
         phaseGroup: "east_west",
-        isOpen: isEwOpen,
+        status: ewStatus,
         lanes: [
           { id: "e_t_0", name: "Lane 0 (Thru)", data: e_0 },
           { id: "e_t_1", name: "Lane 1 (Left Turn)", data: e_1 }
@@ -256,7 +296,7 @@ export default function TrafficControlDashboard() {
         name: "West Corridor (w_t)",
         direction: "Inflow from West (Eastbound)",
         phaseGroup: "east_west",
-        isOpen: isEwOpen,
+        status: ewStatus,
         lanes: [
           { id: "w_t_0", name: "Lane 0 (Thru)", data: w_0 },
           { id: "w_t_1", name: "Lane 1 (Left Turn)", data: w_1 }
@@ -266,7 +306,7 @@ export default function TrafficControlDashboard() {
         avgSpeed: ((w_0.speed || 0) + (w_1.speed || 0)) / 2 || 0
       }
     };
-  }, [telemetry, isNsOpen, isEwOpen]);
+  }, [telemetry, nsStatus, ewStatus]);
 
   const nsTotalDemand = approaches.north.totalVehicles + approaches.south.totalVehicles;
   const ewTotalDemand = approaches.east.totalVehicles + approaches.west.totalVehicles;
@@ -418,117 +458,69 @@ export default function TrafficControlDashboard() {
             </div>
 
             {/* 1. TOP-LEFT: NORTH INFLOW (n_t) - Left side of North Lane */}
-            <div className={`absolute top-3 left-3 md:left-4 w-32 md:w-36 flex flex-col items-center p-2 rounded-xl border transition-all z-20 shadow-xl ${
-              isNsOpen ? 'bg-emerald-950/70 border-emerald-500/80 shadow-emerald-950' : 'bg-slate-950/90 border-slate-800'
-            }`}>
-              <div className="flex items-center justify-between w-full mb-1">
-                <span className="text-[10px] font-black font-mono text-slate-200">NORTH (n_t)</span>
-                <span className={`text-[9px] font-bold font-mono px-1.5 py-0.2 rounded ${
-                  isNsOpen ? 'bg-emerald-500 text-slate-950' : 'bg-red-500/20 text-red-400 border border-red-500/40'
-                }`}>
-                  {isNsOpen ? "🟢 GREEN" : "🔴 RED"}
+            <div className={`absolute top-3 left-3 md:left-4 w-32 flex flex-col items-center p-2.5 rounded-xl border transition-all z-20 shadow-xl ${getPhaseContainerClass(nsStatus)}`}>
+              <div className="flex items-center justify-between w-full mb-1.5">
+                <span className="text-[11px] font-black font-mono text-slate-200">NORTH</span>
+                <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded ${getPhaseClass(nsStatus)}`}>
+                  {getPhaseText(nsStatus)}
                 </span>
               </div>
-              <div className="grid grid-cols-2 gap-1 w-full text-[9px] font-mono text-slate-300">
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 text-center">
-                  <span className="text-slate-400 block text-[8px]">n_0 (Thru)</span>
-                  <strong className="text-white text-[11px]">{telemetry["n_t_0"]?.vehicles || 0}v</strong>
-                  <span className="block text-[8px] text-amber-400">{telemetry["n_t_0"]?.queue || 0}m</span>
-                </div>
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 text-center">
-                  <span className="text-slate-400 block text-[8px]">n_1 (Left)</span>
-                  <strong className="text-white text-[11px]">{telemetry["n_t_1"]?.vehicles || 0}v</strong>
-                  <span className="block text-[8px] text-amber-400">{telemetry["n_t_1"]?.queue || 0}m</span>
-                </div>
+              <div className="w-full text-center p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                <strong className="text-white text-xs font-mono">{approaches.north.totalVehicles} vehicles</strong>
               </div>
             </div>
 
             {/* 2. TOP-RIGHT: EAST INFLOW (e_t) - Top side of East Lane */}
-            <div className={`absolute top-3 right-3 md:right-4 w-32 md:w-36 flex flex-col items-center p-2 rounded-xl border transition-all z-20 shadow-xl ${
-              isEwOpen ? 'bg-emerald-950/70 border-emerald-500/80 shadow-emerald-950' : 'bg-slate-950/90 border-slate-800'
-            }`}>
-              <div className="flex items-center justify-between w-full mb-1">
-                <span className="text-[10px] font-black font-mono text-slate-200">EAST (e_t)</span>
-                <span className={`text-[8px] font-bold font-mono px-1 rounded ${
-                  isEwOpen ? 'bg-emerald-500 text-slate-950' : 'bg-red-500/20 text-red-400'
-                }`}>
-                  {isEwOpen ? "🟢" : "🔴"}
+            <div className={`absolute top-3 right-3 md:right-4 w-32 flex flex-col items-center p-2.5 rounded-xl border transition-all z-20 shadow-xl ${getPhaseContainerClass(ewStatus)}`}>
+              <div className="flex items-center justify-between w-full mb-1.5">
+                <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded ${getPhaseClass(ewStatus)}`}>
+                  {getPhaseText(ewStatus)}
                 </span>
+                <span className="text-[11px] font-black font-mono text-slate-200">EAST</span>
               </div>
-              <div className="flex flex-col gap-1 w-full text-[9px] font-mono text-slate-300">
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 flex justify-between">
-                  <span className="text-[8px] text-slate-400">e_0 (Thru):</span>
-                  <strong>{telemetry["e_t_0"]?.vehicles || 0}v ({telemetry["e_t_0"]?.queue || 0}m)</strong>
-                </div>
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 flex justify-between">
-                  <span className="text-[8px] text-slate-400">e_1 (Left):</span>
-                  <strong>{telemetry["e_t_1"]?.vehicles || 0}v ({telemetry["e_t_1"]?.queue || 0}m)</strong>
-                </div>
+              <div className="w-full text-center p-1.5 rounded bg-slate-900/90 border border-slate-800">
+                <strong className="text-white text-xs font-mono">{approaches.east.totalVehicles} vehicles</strong>
               </div>
             </div>
 
             {/* 3. BOTTOM-RIGHT: SOUTH INFLOW (s_t) - Right side of South Lane */}
-            <div className={`absolute bottom-3 right-3 md:right-4 w-32 md:w-36 flex flex-col items-center p-2 rounded-xl border transition-all z-20 shadow-xl ${
-              isNsOpen ? 'bg-emerald-950/70 border-emerald-500/80 shadow-emerald-950' : 'bg-slate-950/90 border-slate-800'
-            }`}>
-              <div className="grid grid-cols-2 gap-1 w-full text-[9px] font-mono text-slate-300 mb-1">
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 text-center">
-                  <span className="text-slate-400 block text-[8px]">s_0 (Thru)</span>
-                  <strong className="text-white text-[11px]">{telemetry["s_t_0"]?.vehicles || 0}v</strong>
-                  <span className="block text-[8px] text-amber-400">{telemetry["s_t_0"]?.queue || 0}m</span>
-                </div>
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 text-center">
-                  <span className="text-slate-400 block text-[8px]">s_1 (Left)</span>
-                  <strong className="text-white text-[11px]">{telemetry["s_t_1"]?.vehicles || 0}v</strong>
-                  <span className="block text-[8px] text-amber-400">{telemetry["s_t_1"]?.queue || 0}m</span>
-                </div>
+            <div className={`absolute bottom-3 right-3 md:right-4 w-32 flex flex-col items-center p-2.5 rounded-xl border transition-all z-20 shadow-xl ${getPhaseContainerClass(nsStatus)}`}>
+              <div className="w-full text-center p-1.5 rounded bg-slate-900/90 border border-slate-800 mb-1.5">
+                <strong className="text-white text-xs font-mono">{approaches.south.totalVehicles} vehicles</strong>
               </div>
               <div className="flex items-center justify-between w-full">
-                <span className="text-[10px] font-black font-mono text-slate-200">SOUTH (s_t)</span>
-                <span className={`text-[9px] font-bold font-mono px-1.5 py-0.2 rounded ${
-                  isNsOpen ? 'bg-emerald-500 text-slate-950' : 'bg-red-500/20 text-red-400 border border-red-500/40'
-                }`}>
-                  {isNsOpen ? "🟢 GREEN" : "🔴 RED"}
+                <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded ${getPhaseClass(nsStatus)}`}>
+                  {getPhaseText(nsStatus)}
                 </span>
+                <span className="text-[11px] font-black font-mono text-slate-200">SOUTH</span>
               </div>
             </div>
 
             {/* 4. BOTTOM-LEFT: WEST INFLOW (w_t) - Bottom side of West Lane */}
-            <div className={`absolute bottom-3 left-3 md:left-4 w-32 md:w-36 flex flex-col items-center p-2 rounded-xl border transition-all z-20 shadow-xl ${
-              isEwOpen ? 'bg-emerald-950/70 border-emerald-500/80 shadow-emerald-950' : 'bg-slate-950/90 border-slate-800'
-            }`}>
-              <div className="flex items-center justify-between w-full mb-1">
-                <span className="text-[10px] font-black font-mono text-slate-200">WEST (w_t)</span>
-                <span className={`text-[8px] font-bold font-mono px-1 rounded ${
-                  isEwOpen ? 'bg-emerald-500 text-slate-950' : 'bg-red-500/20 text-red-400'
-                }`}>
-                  {isEwOpen ? "🟢" : "🔴"}
-                </span>
+            <div className={`absolute bottom-3 left-3 md:left-4 w-32 flex flex-col items-center p-2.5 rounded-xl border transition-all z-20 shadow-xl ${getPhaseContainerClass(ewStatus)}`}>
+              <div className="w-full text-center p-1.5 rounded bg-slate-900/90 border border-slate-800 mb-1.5">
+                <strong className="text-white text-xs font-mono">{approaches.west.totalVehicles} vehicles</strong>
               </div>
-              <div className="flex flex-col gap-1 w-full text-[9px] font-mono text-slate-300">
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 flex justify-between">
-                  <span className="text-[8px] text-slate-400">w_0 (Thru):</span>
-                  <strong>{telemetry["w_t_0"]?.vehicles || 0}v ({telemetry["w_t_0"]?.queue || 0}m)</strong>
-                </div>
-                <div className="p-1 rounded bg-slate-900/90 border border-slate-800 flex justify-between">
-                  <span className="text-[8px] text-slate-400">w_1 (Left):</span>
-                  <strong>{telemetry["w_t_1"]?.vehicles || 0}v ({telemetry["w_t_1"]?.queue || 0}m)</strong>
-                </div>
+              <div className="flex items-center justify-between w-full">
+                <span className="text-[11px] font-black font-mono text-slate-200">WEST</span>
+                <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded ${getPhaseClass(ewStatus)}`}>
+                  {getPhaseText(ewStatus)}
+                </span>
               </div>
             </div>
 
             {/* CENTRAL JUNCTION HUB */}
             <div className="relative w-28 h-28 rounded-2xl flex flex-col items-center justify-center border-2 transition-all duration-300 z-30 shadow-2xl bg-slate-950 border-indigo-500/60 shadow-indigo-950">
-              {isNsOpen ? (
-                <div className="flex flex-col items-center justify-center text-emerald-400 animate-pulse">
+              {activePhase === "north_south" ? (
+                <div className={`flex flex-col items-center justify-center ${targetPhase ? 'text-yellow-400' : 'text-emerald-400'} animate-pulse`}>
                   <ArrowDown className="w-7 h-7" />
-                  <span className="text-[10px] font-black font-mono tracking-wider mt-1">N-S OPEN</span>
+                  <span className="text-[10px] font-black font-mono tracking-wider mt-1">N-S {targetPhase ? 'YELLOW' : 'OPEN'}</span>
                   <span className="text-[8px] font-mono text-slate-400">E-W STOPPED</span>
                 </div>
               ) : (
-                <div className="flex flex-col items-center justify-center text-emerald-400 animate-pulse">
+                <div className={`flex flex-col items-center justify-center ${targetPhase ? 'text-yellow-400' : 'text-emerald-400'} animate-pulse`}>
                   <ArrowRight className="w-7 h-7" />
-                  <span className="text-[10px] font-black font-mono tracking-wider mt-1">E-W OPEN</span>
+                  <span className="text-[10px] font-black font-mono tracking-wider mt-1">E-W {targetPhase ? 'YELLOW' : 'OPEN'}</span>
                   <span className="text-[8px] font-mono text-slate-400">N-S STOPPED</span>
                 </div>
               )}
@@ -541,22 +533,26 @@ export default function TrafficControlDashboard() {
             <button
               onClick={() => handleManualPhaseOverride("north_south")}
               className={`p-2.5 rounded-xl border text-xs font-bold font-mono transition flex items-center justify-center gap-2 cursor-pointer ${
-                isNsOpen 
-                  ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg shadow-emerald-950' 
+                nsStatus === "green" 
+                  ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg shadow-emerald-950'
+                  : nsStatus === "yellow"
+                  ? 'bg-yellow-500 text-slate-950 border-yellow-400 shadow-lg shadow-yellow-950'
                   : 'bg-slate-950 hover:bg-slate-900 text-slate-300 border-slate-800'
               }`}
             >
-              <span>🟢 Phase: North-South Green</span>
+              <span>{nsStatus === "red" ? "🟢 Switch N-S" : nsStatus === "yellow" ? "🟡 Yellow (N-S)" : "🟢 Phase: N-S Green"}</span>
             </button>
             <button
               onClick={() => handleManualPhaseOverride("east_west")}
               className={`p-2.5 rounded-xl font-mono text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer border ${
-                isEwOpen 
+                ewStatus === "green" 
                   ? 'bg-emerald-500 text-slate-950 border-emerald-400 shadow-lg shadow-emerald-950' 
+                  : ewStatus === "yellow"
+                  ? 'bg-yellow-500 text-slate-950 border-yellow-400 shadow-lg shadow-yellow-950'
                   : 'bg-slate-950 hover:bg-slate-900 text-slate-300 border-slate-800'
               }`}
             >
-              <span>🟢 Phase: East-West Green</span>
+              <span>{ewStatus === "red" ? "🟢 Switch E-W" : ewStatus === "yellow" ? "🟡 Yellow (E-W)" : "🟢 Phase: E-W Green"}</span>
             </button>
           </div>
         </div>
@@ -728,75 +724,48 @@ export default function TrafficControlDashboard() {
           </div>
 
         </div>
-
       </div>
 
-      {/* 3. EXACT 4-APPROACH & 8-LANE TELEMETRY SPECIFICATION */}
-      <div className="mt-6">
+      {/* 3. RAW TELEMETRY DATA TABLE */}
+      <div className="mt-5 p-5 rounded-2xl bg-slate-900/60 border border-slate-800/90 shadow-xl overflow-hidden">
         <div className="flex items-center gap-2 mb-4">
-          <Layers className="w-4 h-4 text-indigo-400" />
-          <h2 className="text-sm font-black uppercase tracking-wider text-white">
-            Exact Inflow Lane Breakdown (8 SUMO Network Lanes)
-          </h2>
+          <Layers className="w-4 h-4 text-slate-400" />
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">Live 8-Lane Telemetry Feed</h3>
         </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs font-mono text-slate-300">
+            <thead className="bg-slate-950/80 text-slate-500 uppercase">
+              <tr>
+                <th className="px-4 py-2 border-b border-slate-800">Lane ID</th>
+                <th className="px-4 py-2 border-b border-slate-800">Approach</th>
+                <th className="px-4 py-2 border-b border-slate-800">Vehicle Count</th>
+                <th className="px-4 py-2 border-b border-slate-800">Queue Length (m)</th>
+                <th className="px-4 py-2 border-b border-slate-800">Avg Speed (km/h)</th>
+                <th className="px-4 py-2 border-b border-slate-800">Occupancy</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.values(approaches).flatMap(app => 
+                app.lanes.map(lane => {
+                  const vehCount = lane.data.vehicles ?? lane.data.vehicle_count ?? 0;
+                  const queueM = lane.data.queue ?? lane.data.queue_length ?? 0;
+                  const speedKmh = lane.data.speed ?? lane.data.average_speed ?? 0;
+                  const occ = lane.data.occupancy ?? 0;
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Object.entries(approaches).map(([appKey, appData]) => (
-            <div 
-              key={appKey}
-              className={`p-4 rounded-2xl border transition-all ${
-                appData.isGreen 
-                  ? 'bg-slate-900/90 border-emerald-500/60 shadow-lg shadow-emerald-950/30' 
-                  : 'bg-slate-900/40 border-slate-800/90'
-              }`}
-            >
-              {/* Header */}
-              <div className="flex justify-between items-start pb-2 border-b border-slate-800/80 mb-3">
-                <div>
-                  <h3 className="text-xs font-black font-mono text-white uppercase">{appData.name}</h3>
-                  <span className="text-[10px] text-slate-400 block">{appData.direction}</span>
-                </div>
-                <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full border ${
-                  appData.isGreen ? 'bg-emerald-500 text-slate-950 border-emerald-400' : 'bg-red-500/20 text-red-400 border-red-500/40'
-                }`}>
-                  {appData.isGreen ? "🟢 GREEN" : "🔴 RED"}
-                </span>
-              </div>
-
-              {/* Approach Summary */}
-              <div className="grid grid-cols-3 gap-2 mb-3 text-center text-xs font-mono">
-                <div className="p-1.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-[9px] text-slate-500 block">Vehicles</span>
-                  <strong className="text-white">{appData.totalVeh}</strong>
-                </div>
-                <div className="p-1.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-[9px] text-slate-500 block">Queue</span>
-                  <strong className="text-amber-400">{appData.totalQueue}m</strong>
-                </div>
-                <div className="p-1.5 rounded-lg bg-slate-950 border border-slate-800">
-                  <span className="text-[9px] text-slate-500 block">Speed</span>
-                  <strong className="text-emerald-400">{appData.avgSpeed}</strong>
-                </div>
-              </div>
-
-              {/* 2 Lanes in this approach */}
-              <div className="space-y-2">
-                {appData.lanes.map(l => (
-                  <div key={l.id} className="p-2 rounded-xl bg-slate-950 border border-slate-800/80">
-                    <div className="flex justify-between items-center text-[10px] font-mono">
-                      <span className="font-bold text-indigo-300">{l.id}</span>
-                      <span className="text-slate-400">{l.role}</span>
-                    </div>
-                    <div className="flex justify-between items-baseline mt-1 text-xs font-mono">
-                      <span className="text-white font-bold">{l.vehicles || 0} veh</span>
-                      <span className="text-amber-400">{l.queue || 0}m queue</span>
-                      <span className="text-slate-400">{l.speed || 0} km/h</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+                  return (
+                    <tr key={lane.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition-colors">
+                      <td className="px-4 py-2 font-bold text-slate-200">{lane.id}</td>
+                      <td className="px-4 py-2 text-slate-400">{app.name.split(' ')[0]}</td>
+                      <td className="px-4 py-2 text-indigo-300 font-bold">{vehCount}</td>
+                      <td className="px-4 py-2 text-amber-300">{Number(queueM).toFixed(1)}m</td>
+                      <td className="px-4 py-2 text-emerald-300">{Number(speedKmh).toFixed(1)}</td>
+                      <td className="px-4 py-2 text-cyan-300">{(Number(occ) * 100).toFixed(1)}%</td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
