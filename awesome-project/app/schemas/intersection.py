@@ -12,4 +12,7 @@ class IntersectionStatusResponse(BaseModel):
     emergency_active: bool
     emergency_details: Optional[Dict[str, Any]] = None
     lanes: Dict[str, Any]
+    feed_status: Optional[str] = "ACTIVE"
+    failsafe_active: Optional[bool] = False
+    failsafe_message: Optional[str] = None
     last_updated: Optional[datetime] = None

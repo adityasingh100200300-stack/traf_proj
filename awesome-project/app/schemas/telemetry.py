@@ -14,6 +14,13 @@ class TelemetryIngestRequest(BaseModel):
     intersection_id: str = Field(..., min_length=1, description="Unique intersection identifier")
     timestamp: datetime = Field(..., description="ISO 8601 observation timestamp")
     lanes: List[LaneTelemetryInput] = Field(..., min_length=1, description="List of lane telemetry metrics")
+    frame_number: Optional[int] = Field(default=None, ge=0, description="Video frame index")
+    video_time_seconds: Optional[float] = Field(default=None, ge=0.0, description="Playback timestamp in seconds")
+    total_duration_seconds: Optional[float] = Field(default=None, ge=0.0, description="Total video duration in seconds")
+    video_timestamp: Optional[str] = Field(default=None, description="Formatted playback timestamp MM:SS / MM:SS")
+    feed_status: Optional[str] = Field(default="ACTIVE", description="Camera feed health: ACTIVE or OFFLINE")
+    failsafe_active: Optional[bool] = Field(default=False, description="Whether fallback fixed-time protocol is engaged")
+    failsafe_message: Optional[str] = Field(default=None, description="Reason for failsafe protocol engagement")
 
     model_config = {
         "json_schema_extra": {

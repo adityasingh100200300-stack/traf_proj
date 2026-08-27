@@ -86,7 +86,7 @@ class TelemetryService:
                 await db.rollback()
             except Exception:
                 pass
-            logger.warning(f"Database persistence skipped (DB unavailable or timed out): {e}")
+            logger.debug(f"Database persistence skipped (DB offline): {e}")
             # Non-blocking for live broadcast in prototype mode
 
         # 3. Prepare payload dictionary
@@ -106,8 +106,16 @@ class TelemetryService:
             "intersection_id": payload.intersection_id,
             "timestamp": payload.timestamp.isoformat(),
             "congestion_score": congestion_score,
-            "traffic": traffic_data
+            "traffic": traffic_data,
+            "feed_status": payload.feed_status or "ACTIVE",
+            "failsafe_active": payload.failsafe_active or False,
+            "failsafe_message": payload.failsafe_message
         }
+        if payload.frame_number is not None:
+            live_state["frame_number"] = payload.frame_number
+            live_state["video_time_seconds"] = payload.video_time_seconds
+            live_state["total_duration_seconds"] = payload.total_duration_seconds
+            live_state["video_timestamp"] = payload.video_timestamp
 
         # 4. Cache latest snapshot in Redis and Publish to channel
         redis_key = f"traffic:{payload.intersection_id}"

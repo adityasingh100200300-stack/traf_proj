@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 class RedisManager:
     def __init__(self):
         self.client: Optional[redis.Redis] = None
+        self._memory_cache: dict = {}
 
     async def connect(self):
         try:
@@ -34,21 +35,23 @@ class RedisManager:
         return False
 
     async def set_state(self, key: str, value: Any, expire: int = 3600) -> bool:
+        self._memory_cache[key] = value
         if self.client:
             try:
                 await self.client.set(key, json.dumps(value), ex=expire)
                 return True
             except Exception as e:
                 logger.error(f"Failed to set Redis key {key}: {e}")
-        return False
+        return True
 
     async def get_state(self, key: str) -> Optional[Any]:
         if self.client:
             try:
                 data = await self.client.get(key)
-                return json.loads(data) if data else None
+                if data:
+                    return json.loads(data)
             except Exception as e:
                 logger.error(f"Failed to get Redis key {key}: {e}")
-        return None
+        return self._memory_cache.get(key)
 
 redis_manager = RedisManager()

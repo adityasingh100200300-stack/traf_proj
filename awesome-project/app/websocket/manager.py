@@ -28,13 +28,21 @@ class ConnectionManager:
         await websocket.send_text(message)
 
     async def broadcast(self, message: str):
-        for connections in self.active_connections.values():
-            for connection in connections:
-                await connection.send_text(message)
+        for intersection_id in list(self.active_connections.keys()):
+            await self.broadcast_to_intersection(intersection_id, message)
 
     async def broadcast_to_intersection(self, intersection_id: str, message: str):
-        if intersection_id in self.active_connections:
-            for connection in self.active_connections[intersection_id]:
+        if intersection_id not in self.active_connections:
+            return
+
+        dead_connections = []
+        for connection in list(self.active_connections.get(intersection_id, [])):
+            try:
                 await connection.send_text(message)
+            except Exception:
+                dead_connections.append(connection)
+
+        for dead in dead_connections:
+            self.disconnect(dead, intersection_id)
 
 websocket_manager = ConnectionManager()

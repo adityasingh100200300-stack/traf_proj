@@ -13,3 +13,12 @@ router = APIRouter()
 )
 async def create_emergency_corridor(payload: EmergencyCorridorRequest):
     return await EmergencyService.create_corridor(payload)
+
+@router.post(
+    "/emergency/corridor/clear",
+    status_code=status.HTTP_200_OK,
+    summary="Clear active emergency green corridor",
+    description="Releases emergency priority lockout and restores normal signal cycles."
+)
+async def clear_emergency_corridor(intersection_id: str = "INT-001", vehicle_id: str = "AMB-911"):
+    return await EmergencyService.clear_corridor(vehicle_id=vehicle_id, intersection_ids=[intersection_id])

@@ -98,7 +98,7 @@ class SumoRLRunner:
 
         return np.array(densities + phase_one_hot, dtype=np.float32)
 
-    def stream_telemetry_to_api(self):
+    def stream_telemetry_to_api(self, sim_step: int = 0):
         if not self.stream_api or not self.http_client:
             return
 
@@ -118,10 +118,18 @@ class SumoRLRunner:
                 "vehicle_classes": {"car": count}
             })
 
+        sim_sec = sim_step
+        cur_m, cur_s = divmod(sim_sec, 60)
+        sim_ts = f"{cur_m:02d}:{cur_s:02d} / 60:00"
+
         payload = {
             "intersection_id": "INT-001",
             "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            "lanes": lanes_data
+            "lanes": lanes_data,
+            "frame_number": sim_step,
+            "video_time_seconds": float(sim_sec),
+            "total_duration_seconds": 3600.0,
+            "video_timestamp": sim_ts
         }
 
         try:
@@ -158,7 +166,7 @@ class SumoRLRunner:
                     traci.trafficlight.setPhase(TLS_ID, green_phase)
 
         # Stream telemetry to frontend every simulation step
-        api_res = self.stream_telemetry_to_api()
+        api_res = self.stream_telemetry_to_api(sim_step)
         if sim_step % 10 == 0 and api_res:
             c_score = api_res.get("congestion_score", 0.0)
             active_dir = "N-S" if self.current_action in [0, 1] else "E-W"
@@ -183,8 +191,8 @@ if __name__ == "__main__":
 
     use_gui = not args.headless
     runner = SumoRLRunner(use_gui=use_gui, stream_api=True)
-    runner.start()
     try:
+        runner.start()
         print(f"[*] Running simulation for {args.steps} steps...")
         for t in range(args.steps):
             runner.step(t)
@@ -192,5 +200,7 @@ if __name__ == "__main__":
         print("\n[*] Simulation completed.")
     except KeyboardInterrupt:
         print("\n[*] Stopping simulation upon user interrupt...")
+    except (traci.exceptions.FatalTraCIError, traci.exceptions.TraCIException):
+        print("\n[*] SUMO GUI window closed or simulation ended.")
     finally:
         runner.close()
